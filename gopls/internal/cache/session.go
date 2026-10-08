@@ -38,6 +38,12 @@ import (
 func NewSession(ctx context.Context, c *Cache) *Session {
 	index := atomic.AddInt64(&sessionIndex, 1)
 	boundary := newPathBoundary(c.startupDir)
+	if c.rootOutput != nil {
+		boundary.onRoot = c.rootOutput.report
+		for _, root := range boundary.roots {
+			c.rootOutput.report(root)
+		}
+	}
 	s := &Session{
 		boundary:    boundary,
 		id:          strconv.FormatInt(index, 10),

@@ -44,7 +44,7 @@ func TestCapabilities(t *testing.T) {
 	// (Unlike app.connect, we use minimal Initialize params.)
 	client := newClient(app)
 	options := settings.DefaultOptions(app.options)
-	server := server.New(cache.NewSession(ctx, cache.New(nil)), client, options)
+	server := server.New(cache.NewSession(ctx, cache.NewWithWorkingDirectory(nil, tmpDir)), client, options)
 	params := &protocol.ParamInitialize{}
 	params.RootURI = protocol.URIFromPath(tmpDir)
 	params.Capabilities.Workspace.Configuration = true

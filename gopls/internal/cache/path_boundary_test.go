@@ -5,10 +5,12 @@
 package cache
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/gopls/internal/protocol"
@@ -269,5 +271,35 @@ func TestWatcherBoundary(t *testing.T) {
 		if ok && (got.BaseURI == "" || !b.pathAllowed(got.BaseURI.Path())) {
 			t.Errorf("unbounded watcher: %v", got)
 		}
+	}
+}
+
+func TestRootOutput(t *testing.T) {
+	dir := t.TempDir()
+	c := NewWithWorkingDirectory(nil, dir)
+	var output bytes.Buffer
+	c.SetRootOutput(&output)
+	s := NewSession(t.Context(), c)
+	defer s.Shutdown(t.Context())
+	gp1, gp2 := filepath.Join(dir, "gopath1"), filepath.Join(dir, "gopath2")
+	s.boundary.addGoEnv("", gp1+string(os.PathListSeparator)+gp2)
+	s.boundary.add(gp1) // repeated roots must not produce repeated output
+	got := strings.Split(strings.TrimSpace(output.String()), "\n")
+	want := slices.Clone(s.boundary.roots)
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("printed roots %v, want %v", got, want)
+	}
+	for _, root := range got {
+		if !s.pathAllowed(root) {
+			t.Errorf("printed forbidden root %q", root)
+		}
+	}
+	before := output.String()
+	s2 := NewSession(t.Context(), c)
+	defer s2.Shutdown(t.Context())
+	if output.String() != before {
+		t.Error("repeated startup roots for a second session")
 	}
 }

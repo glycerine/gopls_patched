@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"go/build"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,8 +24,9 @@ import (
 // pathBoundary limits source discovery to the startup directory and Go's
 // source roots. It is not an OS sandbox for subprocesses or cache writes.
 type pathBoundary struct {
-	mu    sync.RWMutex
-	roots []string
+	mu     sync.RWMutex
+	roots  []string
+	onRoot func(string)
 }
 
 func newPathBoundary(dir string) *pathBoundary {
@@ -57,6 +59,9 @@ func (b *pathBoundary) add(dir string) {
 		}
 	}
 	b.roots = append(b.roots, real)
+	if b.onRoot != nil {
+		b.onRoot(real)
+	}
 }
 
 // resolvePath also handles new files and directories: resolve the nearest
@@ -246,4 +251,30 @@ func (b *pathBoundary) watchPattern(pattern protocol.RelativePattern, folder pro
 		pattern.BaseURI = folder
 	}
 	return pattern, b.pathAllowed(pattern.BaseURI.Path())
+}
+
+// rootOutput serializes diagnostics and avoids repeating roots across sessions.
+type rootOutput struct {
+	mu     sync.Mutex
+	writer io.Writer
+	seen   map[string]bool
+}
+
+func (out *rootOutput) report(root string) {
+	out.mu.Lock()
+	defer out.mu.Unlock()
+	if !out.seen[root] {
+		out.seen[root] = true
+		fmt.Fprintln(out.writer, root)
+	}
+}
+
+// SetRootOutput prints the permitted startup roots to w and reports additional
+// roots as session configuration admits them. Call it before creating sessions.
+// Paths are resolved, deduplicated, and printed one per line.
+func (c *Cache) SetRootOutput(w io.Writer) {
+	c.rootOutput = &rootOutput{writer: w, seen: make(map[string]bool)}
+	for _, root := range newPathBoundary(c.startupDir).roots {
+		c.rootOutput.report(root)
+	}
 }

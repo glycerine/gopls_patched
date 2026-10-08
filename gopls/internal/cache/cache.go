@@ -97,7 +97,8 @@ func NewWithWorkingDirectory(store *memoize.Store, dir string) *Cache {
 
 // A Cache holds content that is shared across multiple gopls sessions.
 type Cache struct {
-	startupDir string // immutable process startup directory
+	startupDir string      // immutable process startup directory
+	rootOutput *rootOutput // optional root diagnostics; set before sessions are created
 
 	id string
 
