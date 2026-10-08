@@ -429,7 +429,7 @@ func TestOrphanedFileDiagnostics_Shutdown(t *testing.T) {
 	}
 
 	ctx := t.Context()
-	session := NewSession(ctx, New(nil))
+	session := NewSession(ctx, NewWithWorkingDirectory(nil, dir))
 
 	opts := settings.DefaultOptions()
 	env, err := FetchGoEnv(ctx, toURI("a"), opts)

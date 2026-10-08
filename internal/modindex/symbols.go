@@ -38,7 +38,7 @@ type symbol struct {
 
 // extractSymbols returns a (new, unordered) array of Entries, one for
 // each provided package directory, describing its exported symbols.
-func extractSymbols(cwd string, dirs iter.Seq[directory]) []Entry {
+func extractSymbols(cwd string, dirs iter.Seq[directory], filters ...func(string) bool) []Entry {
 	var (
 		mu      sync.Mutex
 		entries []Entry
@@ -49,6 +49,9 @@ func extractSymbols(cwd string, dirs iter.Seq[directory]) []Entry {
 	for dir := range dirs {
 		g.Go(func() error {
 			thedir := filepath.Join(cwd, string(dir.path))
+			if !pathPermitted(thedir, filters) {
+				return nil
+			}
 			mode := parser.SkipObjectResolution | parser.ParseComments
 
 			// Parse all Go files in dir and extract symbols.
@@ -63,6 +66,9 @@ func extractSymbols(cwd string, dirs iter.Seq[directory]) []Entry {
 					continue
 				}
 				fname := filepath.Join(thedir, dirent.Name())
+				if !pathPermitted(fname, filters) {
+					continue
+				}
 				tr, err := parser.ParseFile(token.NewFileSet(), fname, nil, mode)
 				if err != nil {
 					continue // ignore errors, someday log them?

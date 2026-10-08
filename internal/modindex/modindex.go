@@ -39,17 +39,27 @@ func Update(gomodcache string) (*Index, error) {
 	return update(gomodcache, prev)
 }
 
+// UpdateWithPathFilter updates the index while restricting source discovery.
+// Entries from a previous index are filtered before being reused.
+func UpdateWithPathFilter(gomodcache string, allowed func(string) bool) (*Index, error) {
+	prev, err := Read(gomodcache)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	return update(gomodcache, prev, allowed)
+}
+
 // update builds, writes, and returns the current index.
 //
 // If old is nil, the new index is built from all of GOMODCACHE;
 // otherwise it is built from the old index plus cache updates
 // since the previous index's time.
-func update(gomodcache string, old *Index) (*Index, error) {
+func update(gomodcache string, old *Index, filters ...func(string) bool) (*Index, error) {
 	gomodcache, err := filepath.Abs(gomodcache)
 	if err != nil {
 		return nil, err
 	}
-	new, changed, err := build(gomodcache, old)
+	new, changed, err := build(gomodcache, old, filters...)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +79,7 @@ func update(gomodcache string, old *Index) (*Index, error) {
 // Index.
 //
 // The boolean result indicates whether new entries were found.
-func build(gomodcache string, old *Index) (*Index, bool, error) {
+func build(gomodcache string, old *Index, filters ...func(string) bool) (*Index, bool, error) {
 	// Set the time window.
 	var start time.Time // = dawn of time
 	if old != nil {
@@ -82,7 +92,7 @@ func build(gomodcache string, old *Index) (*Index, bool, error) {
 
 	// Enumerate GOMODCACHE package directories.
 	// Choose the best (latest) package for each import path.
-	pkgDirs := findDirs(gomodcache, start, end)
+	pkgDirs := findDirs(gomodcache, start, end, filters...)
 	dirByPath, err := bestDirByImportPath(pkgDirs)
 	if err != nil {
 		return nil, false, err
@@ -92,8 +102,13 @@ func build(gomodcache string, old *Index) (*Index, bool, error) {
 	// dirByPath, only in old, or in both.
 	// If both, use the semantically later one.
 	var entries []Entry
+	removed := false
 	if old != nil {
 		for _, entry := range old.Entries {
+			if !pathPermitted(filepath.Join(gomodcache, entry.Dir), filters) {
+				removed = true
+				continue
+			}
 			dir, ok := dirByPath[entry.ImportPath]
 			if !ok || semver.Compare(dir.version, entry.Version) <= 0 {
 				// New dir is missing or not more recent; use old entry.
@@ -104,7 +119,7 @@ func build(gomodcache string, old *Index) (*Index, bool, error) {
 	}
 
 	// Extract symbol information for all the new directories.
-	newEntries := extractSymbols(gomodcache, maps.Values(dirByPath))
+	newEntries := extractSymbols(gomodcache, maps.Values(dirByPath), filters...)
 	entries = append(entries, newEntries...)
 	slices.SortFunc(entries, func(x, y Entry) int {
 		if n := strings.Compare(x.PkgName, y.PkgName); n != 0 {
@@ -117,5 +132,14 @@ func build(gomodcache string, old *Index) (*Index, bool, error) {
 		GOMODCACHE: gomodcache,
 		ValidAt:    now, // time before the directories were scanned
 		Entries:    entries,
-	}, len(newEntries) > 0, nil
+	}, len(newEntries) > 0 || removed, nil
+}
+
+func pathPermitted(path string, filters []func(string) bool) bool {
+	for _, allowed := range filters {
+		if allowed != nil && !allowed(path) {
+			return false
+		}
+	}
+	return true
 }

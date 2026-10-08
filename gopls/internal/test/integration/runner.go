@@ -363,7 +363,7 @@ func (s *loggingFramer) printBuffers(testname string, w io.Writer) {
 
 // defaultServer handles the Default execution mode.
 func (r *Runner) defaultServer() jsonrpc2.StreamServer {
-	return lsprpc.NewStreamServer(cache.New(r.store), false, nil)
+	return lsprpc.NewStreamServer(cache.NewWithWorkingDirectory(r.store, r.tempDir), false, nil)
 }
 
 // forwardedServer handles the Forwarded execution mode.
@@ -371,7 +371,7 @@ func (r *Runner) forwardedServer() jsonrpc2.StreamServer {
 	r.tsOnce.Do(func() {
 		ctx := context.Background()
 		ctx = debug.WithInstance(ctx, "")
-		ss := lsprpc.NewStreamServer(cache.New(nil), false, nil)
+		ss := lsprpc.NewStreamServer(cache.NewWithWorkingDirectory(nil, r.tempDir), false, nil)
 		r.ts = servertest.NewTCPServer(ctx, ss, nil)
 	})
 	return newForwarder("tcp", r.ts.Addr)

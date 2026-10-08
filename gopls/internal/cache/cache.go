@@ -5,6 +5,7 @@
 package cache
 
 import (
+	"os"
 	"reflect"
 	"strconv"
 	"sync/atomic"
@@ -67,6 +68,14 @@ var ballast = make([]byte, 100*1e6)
 // (and they must always be used together), otherwise it may be possible to get
 // cached data referencing token.Pos values not mapped by the FileSet.
 func New(store *memoize.Store) *Cache {
+	dir, _ := os.Getwd() // An unavailable working directory grants no workspace access.
+	return NewWithWorkingDirectory(store, dir)
+}
+
+// NewWithWorkingDirectory creates a cache for a server started in dir.
+// In-process test servers use this to model their startup directory without
+// changing the working directory of concurrent tests.
+func NewWithWorkingDirectory(store *memoize.Store, dir string) *Cache {
 	index := atomic.AddInt64(&cacheIndex, 1)
 
 	if store == nil {
@@ -75,6 +84,7 @@ func New(store *memoize.Store) *Cache {
 
 	c := &Cache{
 		id:         strconv.FormatInt(index, 10),
+		startupDir: dir,
 		store:      store,
 		memoizedFS: newMemoizedFS(),
 		modCache: &sharedModCache{
@@ -87,6 +97,8 @@ func New(store *memoize.Store) *Cache {
 
 // A Cache holds content that is shared across multiple gopls sessions.
 type Cache struct {
+	startupDir string // immutable process startup directory
+
 	id string
 
 	// store holds cached calculations.

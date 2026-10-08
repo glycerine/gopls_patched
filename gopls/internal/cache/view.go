@@ -95,6 +95,8 @@ type GoEnv struct {
 // A View is a logical build (the viewDefinition) along with a state of that
 // build (the Snapshot).
 type View struct {
+	boundary *pathBoundary
+
 	id string // a unique string to identify this View in (e.g.) serialized Commands
 
 	*viewDefinition // build configuration
@@ -364,8 +366,31 @@ func (v *View) Env() []string {
 		os.Environ(),
 		v.folder.Options.EnvSlice(),
 		[]string{"GO111MODULE=" + v.adjustedGO111MODULE()},
+		v.sourceEnv(),
 		v.EnvOverlay(),
 	)
+}
+
+// sourceEnv prevents Go commands from rediscovering excluded ancestors.
+func (v *View) sourceEnv() []string {
+	if v.boundary == nil {
+		return nil
+	}
+	var env []string
+	if v.gowork == "" {
+		env = append(env, "GOWORK=off")
+	}
+	if v.typ == AdHocView {
+		env = append(env, "GO111MODULE=off")
+	}
+	// go list returns generated Go sources in GOCACHE (notably for cgo).
+	// Keep those files within the source boundary too.
+	if cache := v.folder.Env.GOCACHE; cache != "" && cache != "off" && !v.boundary.pathAllowed(cache) {
+		if paths := filepath.SplitList(v.folder.Env.GOPATH); len(paths) > 0 {
+			env = append(env, "GOCACHE="+filepath.Join(paths[0], "pkg", "gopls-build-cache"))
+		}
+	}
+	return env
 }
 
 // ModcacheIndex returns the module cache index
@@ -383,6 +408,11 @@ func (s *Session) UpdateFolders(ctx context.Context, newFolders []*Folder) error
 	s.viewMu.Lock()
 	defer s.viewMu.Unlock()
 
+	for _, folder := range newFolders {
+		if err := s.checkFolder(folder); err != nil {
+			return err
+		}
+	}
 	overlays := s.Overlays()
 	var openFiles []protocol.DocumentURI
 	for _, o := range overlays {
@@ -439,6 +469,12 @@ func (s *Snapshot) locateTemplateFiles(ctx context.Context) {
 	err := filepath.WalkDir(s.view.folder.Dir.Path(), func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if !s.pathAllowed(path) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if entry.IsDir() {
 			return nil
@@ -516,7 +552,7 @@ func (v *View) shutdown() {
 func (v *View) ScanImports() {
 	gomodcache := v.folder.Env.GOMODCACHE
 	dirCache := v.importsState.modCache.dirCache(gomodcache)
-	imports.ScanModuleCache(gomodcache, dirCache, log.Printf)
+	imports.ScanModuleCache(gomodcache, dirCache, log.Printf, v.boundary.pathAllowed)
 }
 
 // IgnoredFile reports if a file would be ignored by a `go list` of the whole
@@ -834,6 +870,9 @@ func (s *Session) invalidateViewLocked(ctx context.Context, v *View, changed Sta
 // (e.g. fileExists func(DocumentURI) bool) to make clear that this
 // process depends only on directory information, not file contents.
 func defineView(ctx context.Context, fs file.Source, folder *Folder, forFile file.Handle) (*viewDefinition, error) {
+	if !pathAllowed(fs, folder.Dir.Path()) {
+		return nil, fmt.Errorf("workspace folder %s is outside the gopls source roots", folder.Dir.Path())
+	}
 	if err := checkPathValid(folder.Dir.Path()); err != nil {
 		return nil, fmt.Errorf("invalid workspace folder path: %w; check that the spelling of the configured workspace folder path agrees with the spelling reported by the operating system", err)
 	}
@@ -885,6 +924,9 @@ func defineView(ctx context.Context, fs file.Source, folder *Folder, forFile fil
 	if folder.Env.ExplicitGOWORK != "off" && folder.Env.ExplicitGOWORK != "" {
 		goworkFromEnv = true
 		def.gowork = protocol.URIFromPath(folder.Env.ExplicitGOWORK)
+		if !pathAllowed(fs, def.gowork.Path()) {
+			return nil, fmt.Errorf("GOWORK %s is outside the gopls source roots", def.gowork.Path())
+		}
 	} else {
 		def.gowork, err = findRootPattern(ctx, dirURI, "go.work", fs)
 		if err != nil {
@@ -897,6 +939,14 @@ func defineView(ctx context.Context, fs file.Source, folder *Folder, forFile fil
 	def.gomod, err = findRootPattern(ctx, dirURI, "go.mod", fs)
 	if err != nil {
 		return nil, err
+	}
+
+	// Validate replacements even when they are not included in the workspace:
+	// the Go command follows these paths when loading dependencies.
+	if def.gomod != "" {
+		if _, err := goModModules(ctx, def.gomod, fs); errors.Is(err, errOutsideSourceRoots) {
+			return nil, err
+		}
 	}
 
 	// Determine how we load and where to load package information for this view
@@ -948,6 +998,14 @@ func defineView(ctx context.Context, fs file.Source, folder *Folder, forFile fil
 			def.root = def.gowork.Dir()
 		}
 		def.workspaceModFiles, def.workspaceModFilesErr = goWorkModules(ctx, def.gowork, fs)
+		if errors.Is(def.workspaceModFilesErr, errOutsideSourceRoots) {
+			return nil, def.workspaceModFilesErr
+		}
+		for modURI := range def.workspaceModFiles {
+			if _, err := goModModules(ctx, modURI, fs); errors.Is(err, errOutsideSourceRoots) {
+				return nil, err
+			}
+		}
 
 		// If forURI is in a module but that module is not
 		// included in the go.work file, use a go.mod view with GOWORK=off.
@@ -1112,6 +1170,9 @@ func loadGoEnv(ctx context.Context, dir string, configEnv []string, runner *goco
 func findRootPattern(ctx context.Context, dirURI protocol.DocumentURI, basename string, fs file.Source) (protocol.DocumentURI, error) {
 	dir := dirURI.Path()
 	for dir != "" {
+		if !pathAllowed(fs, dir) {
+			break
+		}
 		target := filepath.Join(dir, basename)
 		uri := protocol.URIFromPath(target)
 		fh, err := fs.ReadFile(ctx, uri)

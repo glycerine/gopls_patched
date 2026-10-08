@@ -37,11 +37,13 @@ import (
 // NewSession creates a new gopls session with the given cache.
 func NewSession(ctx context.Context, c *Cache) *Session {
 	index := atomic.AddInt64(&sessionIndex, 1)
+	boundary := newPathBoundary(c.startupDir)
 	s := &Session{
+		boundary:    boundary,
 		id:          strconv.FormatInt(index, 10),
 		cache:       c,
 		gocmdRunner: &gocommand.Runner{},
-		overlayFS:   newOverlayFS(c),
+		overlayFS:   newOverlayFS(boundedSource{c, boundary}),
 		parseCache:  newParseCache(1 * time.Minute), // keep recently parsed files for a minute, to optimize typing CPU
 		viewMap:     make(map[protocol.DocumentURI]*View),
 	}
@@ -54,6 +56,8 @@ func NewSession(ctx context.Context, c *Cache) *Session {
 //
 // It implements the file.Source interface.
 type Session struct {
+	boundary *pathBoundary
+
 	// Unique identifier for this session.
 	id string
 
@@ -125,6 +129,10 @@ func (s *Session) NewView(ctx context.Context, folder *Folder) (*View, *Snapshot
 		return nil, nil, nil, ErrSessionShutdown
 	}
 
+	if err := s.checkFolder(folder); err != nil {
+		return nil, nil, nil, err
+	}
+
 	// Querying the file system to check whether
 	// two folders denote the same existing directory.
 	if inode1, err := os.Stat(filepath.FromSlash(folder.Dir.Path())); err == nil {
@@ -182,6 +190,9 @@ func (s *Session) createView(ctx context.Context, def *viewDefinition) (*View, *
 		dirPrefix := strings.TrimSuffix(string(def.folder.Dir), "/") + "/"
 		pathIncluded := PathIncludeFunc(def.folder.Options.DirectoryFilters)
 		skipPath = func(dir string) bool {
+			if !s.pathAllowed(dir) {
+				return true
+			}
 			uri := strings.TrimSuffix(string(protocol.URIFromPath(dir)), "/")
 			// Note that the logic below doesn't handle the case where uri ==
 			// v.folder.Dir, because there is no point in excluding the entire
@@ -212,7 +223,7 @@ func (s *Session) createView(ctx context.Context, def *viewDefinition) (*View, *
 	var pe *imports.ProcessEnv
 	{
 		env := make(map[string]string)
-		envSlice := slices.Concat(os.Environ(), def.folder.Options.EnvSlice(), []string{"GO111MODULE=" + def.adjustedGO111MODULE()})
+		envSlice := slices.Concat(os.Environ(), def.folder.Options.EnvSlice(), []string{"GO111MODULE=" + def.adjustedGO111MODULE()}, (&View{viewDefinition: def, boundary: s.boundary}).sourceEnv(), def.EnvOverlay())
 		for _, kv := range envSlice {
 			if k, v, ok := strings.Cut(kv, "="); ok {
 				env[k] = v
@@ -226,6 +237,7 @@ func (s *Session) createView(ctx context.Context, def *viewDefinition) (*View, *
 			ModFlag:        "readonly",
 			SkipPathInScan: skipPath,
 			Env:            env,
+			PathAllowed:    s.pathAllowed,
 			WorkingDir:     def.root.Path(),
 			ModCache:       s.cache.modCache.dirCache(def.folder.Env.GOMODCACHE),
 		}
@@ -237,6 +249,7 @@ func (s *Session) createView(ctx context.Context, def *viewDefinition) (*View, *
 	}
 
 	v := &View{
+		boundary:             s.boundary,
 		id:                   strconv.FormatInt(index, 10),
 		gocmdRunner:          s.gocmdRunner,
 		initialWorkspaceLoad: make(chan struct{}),
@@ -248,7 +261,7 @@ func (s *Session) createView(ctx context.Context, def *viewDefinition) (*View, *
 		fs:                   s.overlayFS,
 		viewDefinition:       def,
 		importsState:         newImportsState(backgroundCtx, s.cache.modCache, pe),
-		modcacheState:        newModcacheState(def.folder.Env.GOMODCACHE),
+		modcacheState:        newModcacheState(def.folder.Env.GOMODCACHE, s.pathAllowed),
 	}
 
 	s.snapshotWG.Add(1)
@@ -800,6 +813,12 @@ func (s *Session) DidModifyFiles(ctx context.Context, modifications []file.Modif
 		return nil, ErrSessionShutdown
 	}
 
+	for _, change := range modifications {
+		if err := s.CheckPath(change.URI); err != nil {
+			return nil, err
+		}
+	}
+
 	// Update overlays.
 	//
 	// This is done while holding viewMu because the set of open files affects
@@ -1165,17 +1184,21 @@ func (s *Session) FileWatchingGlobPatterns(ctx context.Context) map[protocol.Rel
 	s.viewMu.Lock()
 	defer s.viewMu.Unlock()
 
-	// Always watch files that may change the set of views.
-	patterns := map[protocol.RelativePattern]unit{
-		{Pattern: "**/*.{mod,work}"}: {},
-	}
+	patterns := make(map[protocol.RelativePattern]unit)
 
 	for _, view := range s.views {
 		snapshot, release, err := view.Snapshot()
 		if err != nil {
 			continue // view is shut down; continue with others
 		}
-		maps.Copy(patterns, snapshot.fileWatchingGlobPatterns())
+		if s.pathAllowed(view.folder.Dir.Path()) {
+			patterns[protocol.RelativePattern{BaseURI: view.folder.Dir, Pattern: "**/*.{mod,work}"}] = unit{}
+		}
+		for pattern := range snapshot.fileWatchingGlobPatterns() {
+			if pattern, ok := s.boundary.watchPattern(pattern, view.folder.Dir); ok {
+				patterns[pattern] = unit{}
+			}
+		}
 		release()
 	}
 	return patterns

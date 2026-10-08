@@ -23,6 +23,11 @@ type ProcessEnvSource struct {
 	pkgName  string
 }
 
+// PathAllowed limits sibling file reads when the environment is restricted.
+func (s *ProcessEnvSource) PathAllowed(path string) bool {
+	return s.env.PathAllowed == nil || s.env.PathAllowed(path)
+}
+
 // NewProcessEnvSource returns a [ProcessEnvSource] wrapping the given
 // env, to be used for fixing imports in the file with name filename in package
 // named pkgName.

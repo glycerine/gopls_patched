@@ -79,7 +79,7 @@ func dirToImportPathVersion(dir string) (string, string, error) {
 // findDirs returns an unordered list of relevant package directories,
 // relative to the specified module cache root. The result includes only
 // module dirs whose mtime is within (start, end).
-func findDirs(root string, start, end time.Time) []string {
+func findDirs(root string, start, end time.Time, filters ...func(string) bool) []string {
 	var (
 		resMu sync.Mutex
 		res   []string
@@ -93,6 +93,9 @@ func findDirs(root string, start, end time.Time) []string {
 	}
 
 	skipDir := func(_ gopathwalk.Root, dir string) bool {
+		if !pathPermitted(dir, filters) {
+			return true
+		}
 		// The cache directory is already ignored in gopathwalk.
 		if filepath.Base(dir) == "internal" {
 			return true

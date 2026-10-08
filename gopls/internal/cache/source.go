@@ -26,6 +26,9 @@ type goplsSource struct {
 	ctx context.Context
 }
 
+// PathAllowed limits sibling file reads performed by the import fixer.
+func (s *goplsSource) PathAllowed(path string) bool { return s.snapshot.pathAllowed(path) }
+
 func (s *Snapshot) NewGoplsSource() *goplsSource {
 	return &goplsSource{
 		snapshot: s,

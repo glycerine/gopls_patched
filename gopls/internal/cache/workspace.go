@@ -41,6 +41,21 @@ func goWorkModules(ctx context.Context, gowork protocol.DocumentURI, fs file.Sou
 	for _, use := range workFile.Use {
 		usedDirs = append(usedDirs, use.Path)
 	}
+	// Replacements in go.work are followed by the Go command too.
+	for _, replace := range workFile.Replace {
+		if modfile.IsDirectoryPath(replace.New.Path) {
+			usedDirs = append(usedDirs, replace.New.Path)
+		}
+	}
+	mods := localModFiles(dir, usedDirs)
+	if err := checkLocalModFiles(fs, mods); err != nil {
+		return nil, err
+	}
+	// Replacements are dependencies, not workspace modules.
+	usedDirs = nil
+	for _, use := range workFile.Use {
+		usedDirs = append(usedDirs, use.Path)
+	}
 	return localModFiles(dir, usedDirs), nil
 }
 
@@ -107,6 +122,9 @@ func goModModules(ctx context.Context, gomod protocol.DocumentURI, fs file.Sourc
 	}
 	modFiles := localModFiles(dir, localReplaces)
 	modFiles[gomod] = unit{}
+	if err := checkLocalModFiles(fs, modFiles); err != nil {
+		return nil, err
+	}
 	return modFiles, nil
 }
 
@@ -126,3 +144,12 @@ var errExhausted = errors.New("exhausted")
 // Note: per golang/go#56496, the previous limit of 1M files was too slow, at
 // which point this limit was decreased to 100K.
 const fileLimit = 100_000
+
+func checkLocalModFiles(fs file.Source, mods map[protocol.DocumentURI]unit) error {
+	for uri := range mods {
+		if !pathAllowed(fs, uri.Path()) {
+			return fmt.Errorf("local module %s: %w", uri.DirPath(), errOutsideSourceRoots)
+		}
+	}
+	return nil
+}

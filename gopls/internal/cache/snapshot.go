@@ -897,6 +897,9 @@ func (s *Snapshot) addKnownSubdirs(patterns map[protocol.RelativePattern]unit, w
 	defer s.mu.Unlock()
 
 	for dir := range s.files.getDirs().All() {
+		if !s.pathAllowed(dir) {
+			continue
+		}
 		for _, wsDir := range wsDirs {
 			if pathutil.InDir(wsDir, dir) {
 				patterns[protocol.RelativePattern{Pattern: filepath.ToSlash(dir)}] = unit{}

@@ -104,7 +104,7 @@ func (c *sharedModCache) dirCache(dir string) *imports.DirInfoCache {
 
 // refreshDir schedules a refresh of the given directory, which must be a
 // module cache.
-func (c *sharedModCache) refreshDir(ctx context.Context, dir string, logf func(string, ...any)) {
+func (c *sharedModCache) refreshDir(ctx context.Context, dir string, logf func(string, ...any), pathAllowed func(string) bool) {
 	cache := c.dirCache(dir)
 
 	c.mu.Lock()
@@ -114,7 +114,7 @@ func (c *sharedModCache) refreshDir(ctx context.Context, dir string, logf func(s
 		timer = newRefreshTimer(func() {
 			_, done := event.Start(ctx, "cache.sharedModCache.refreshDir", label.Directory.Of(dir))
 			defer done()
-			imports.ScanModuleCache(dir, cache, logf)
+			imports.ScanModuleCache(dir, cache, logf, pathAllowed)
 		})
 		c.timers[dir] = timer
 	}
@@ -151,6 +151,7 @@ func newImportsState(backgroundCtx context.Context, modCache *sharedModCache, en
 // modcacheState holds a modindex.Index and controls its updates
 type modcacheState struct {
 	gomodcache   string
+	pathAllowed  func(string) bool
 	refreshTimer *refreshTimer
 
 	// (index, indexErr) is zero in the initial state.
@@ -162,9 +163,10 @@ type modcacheState struct {
 
 // newModcacheState constructs a new modcacheState for goimports.
 // The returned state is automatically updated until [modcacheState.stopTimer] is called.
-func newModcacheState(gomodcache string) *modcacheState {
+func newModcacheState(gomodcache string, pathAllowed func(string) bool) *modcacheState {
 	s := &modcacheState{
-		gomodcache: gomodcache,
+		gomodcache:  gomodcache,
+		pathAllowed: pathAllowed,
 	}
 	s.refreshTimer = newRefreshTimer(s.refreshIndex)
 	go s.refreshIndex()
@@ -186,7 +188,7 @@ func (s *modcacheState) getIndex() (*modindex.Index, error) {
 }
 
 func (s *modcacheState) refreshIndex() {
-	index, err := modindex.Update(s.gomodcache)
+	index, err := modindex.UpdateWithPathFilter(s.gomodcache, s.pathAllowed)
 	s.mu.Lock()
 	if err != nil {
 		if s.indexErr != nil {
@@ -274,7 +276,7 @@ func (s *importsState) runProcessEnvFunc(ctx context.Context, snapshot *Snapshot
 	// required environment variables in ProcessEnv.Env, to avoid the redundant
 	// Go command invocation.
 	gomodcache := snapshot.view.folder.Env.GOMODCACHE
-	s.modCache.refreshDir(s.ctx, gomodcache, s.processEnv.Logf)
+	s.modCache.refreshDir(s.ctx, gomodcache, s.processEnv.Logf, s.processEnv.PathAllowed)
 
 	return nil
 }

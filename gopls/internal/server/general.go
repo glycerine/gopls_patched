@@ -654,7 +654,7 @@ func (s *server) SetOptions(opts *settings.Options) {
 }
 
 func (s *server) newFolder(ctx context.Context, folder protocol.DocumentURI, name string, opts *settings.Options) (*cache.Folder, error) {
-	env, err := cache.FetchGoEnv(ctx, folder, opts)
+	env, err := s.session.FetchGoEnv(ctx, folder, opts)
 	if err != nil {
 		return nil, err
 	}

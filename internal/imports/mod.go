@@ -409,9 +409,9 @@ func (r *ModuleResolver) cacheStore(info directoryPackageInfo) {
 // cachePackageName caches the package name for a dir already in the cache.
 func (r *ModuleResolver) cachePackageName(info directoryPackageInfo) (string, error) {
 	if info.rootType == gopathwalk.RootModuleCache {
-		return r.moduleCacheCache.CachePackageName(info)
+		return r.moduleCacheCache.CachePackageName(info, r.env.PathAllowed)
 	}
-	return r.otherCache.CachePackageName(info)
+	return r.otherCache.CachePackageName(info, r.env.PathAllowed)
 }
 
 func (r *ModuleResolver) cacheExports(ctx context.Context, env *ProcessEnv, info directoryPackageInfo) (string, []stdlib.Symbol, error) {
@@ -537,6 +537,9 @@ func (r *ModuleResolver) scan(ctx context.Context, callback *scanCallback) error
 	defer done()
 
 	processDir := func(info directoryPackageInfo) {
+		if r.env.PathAllowed != nil && !r.env.PathAllowed(info.dir) {
+			return
+		}
 		// Skip this directory if we were not able to get the package information successfully.
 		if scanned, err := info.reachedStatus(directoryScanned); !scanned || err != nil {
 			return
@@ -574,6 +577,9 @@ func (r *ModuleResolver) scan(ctx context.Context, callback *scanCallback) error
 	// We assume cached directories are fully cached, including all their
 	// children, and have not changed. We can skip them.
 	skip := func(root gopathwalk.Root, dir string) bool {
+		if r.env.PathAllowed != nil && !r.env.PathAllowed(dir) {
+			return true
+		}
 		if r.env.SkipPathInScan != nil && root.Type == gopathwalk.RootCurrentModule {
 			if root.Path == dir {
 				return false

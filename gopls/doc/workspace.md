@@ -25,6 +25,25 @@ will typically work when you open a Go file anywhere in your workspace. If it
 isn't working for you, or if you want to better understand how gopls models
 your workspace, please read on.
 
+## Source discovery boundary
+
+Gopls limits source discovery to its startup working directory, GOROOT, and
+all GOPATH entries. Start gopls in the project directory you intend to edit;
+opening another folder in the editor does not expand this boundary. Starting
+it in your home directory permits discovery throughout that directory.
+
+Parent `go.mod` and `go.work` searches stop at the boundary. Workspace folders,
+explicit GOWORK files, local `use` and `replace` targets, and a custom
+GOMODCACHE must fall within the allowed roots. Symlinks are checked against
+their resolved targets, including paths for files that do not yet exist.
+Import completion and background module-cache scans use the same boundary.
+If GOCACHE is outside these roots, workspace Go commands use
+`GOPATH/pkg/gopls-build-cache` so generated Go sources remain accessible.
+
+This is a source discovery restriction, not an operating-system sandbox.
+Go commands, package drivers, and build tools still run with the process's
+normal permissions, and gopls may write its caches outside the source roots.
+
 ## Workspace builds
 
 Starting with gopls v0.15.0, gopls will guess the builds you are working on

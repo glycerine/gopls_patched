@@ -117,7 +117,7 @@ func Test(t *testing.T) {
 	}
 
 	// Opt: use a shared cache.
-	cache := cache.New(nil)
+	cache := cache.NewWithWorkingDirectory(nil, os.TempDir())
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

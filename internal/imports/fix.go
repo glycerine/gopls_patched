@@ -97,7 +97,7 @@ type ImportFix struct {
 //
 // It returns an error only if ctx is cancelled. Files with parse errors are
 // ignored.
-func parseOtherFiles(ctx context.Context, fset *token.FileSet, srcDir, filename string) ([]*ast.File, error) {
+func parseOtherFiles(ctx context.Context, fset *token.FileSet, srcDir, filename string, filters ...func(string) bool) ([]*ast.File, error) {
 	// This could use go/packages but it doesn't buy much, and it fails
 	// with https://golang.org/issue/26296 in LoadFiles mode in some cases.
 	considerTests := strings.HasSuffix(filename, "_test.go")
@@ -120,7 +120,18 @@ func parseOtherFiles(ctx context.Context, fset *token.FileSet, srcDir, filename 
 			continue
 		}
 
-		f, err := parser.ParseFile(fset, filepath.Join(srcDir, fi.Name()), nil, parser.SkipObjectResolution)
+		path := filepath.Join(srcDir, fi.Name())
+		skip := false
+		for _, allowed := range filters {
+			if allowed != nil && !allowed(path) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if err != nil {
 			continue
 		}
@@ -696,7 +707,11 @@ func computeFixesWithSource(ctx context.Context, fset *token.FileSet, f *ast.Fil
 		return fixes, nil
 	}
 
-	otherFiles, err := parseOtherFiles(ctx, fset, srcDir, filename)
+	var allowed func(string) bool
+	if bounded, ok := source.(interface{ PathAllowed(string) bool }); ok {
+		allowed = bounded.PathAllowed
+	}
+	otherFiles, err := parseOtherFiles(ctx, fset, srcDir, filename, allowed)
 	if err != nil {
 		return nil, err
 	}
@@ -1034,6 +1049,10 @@ type ProcessEnv struct {
 	// the RootCurrentModule root type. The function argument is a clean,
 	// absolute path.
 	SkipPathInScan func(string) bool
+
+	// PathAllowed limits all source scans, including dependency roots and
+	// symlink targets. Nil permits all paths.
+	PathAllowed func(string) bool
 
 	// Env overrides the OS environment, and can be used to specify
 	// GOPROXY, GO111MODULE, etc. PATH cannot be set here, because
@@ -1436,7 +1455,7 @@ func importPathToName(bctx *build.Context, importPath, srcDir string) string {
 // the only thing desired is the package name. Given a directory,
 // packageDirToName then only parses one file in the package,
 // trusting that the files in the directory are consistent.
-func packageDirToName(dir string) (packageName string, err error) {
+func packageDirToName(dir string, filters ...func(string) bool) (packageName string, err error) {
 	d, err := os.Open(dir)
 	if err != nil {
 		return "", err
@@ -1458,6 +1477,16 @@ func packageDirToName(dir string) (packageName string, err error) {
 		}
 		nfile++
 		fullFile := filepath.Join(dir, name)
+		skip := false
+		for _, allowed := range filters {
+			if allowed != nil && !allowed(fullFile) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
 
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, fullFile, nil, parser.PackageClauseOnly)
@@ -1550,6 +1579,9 @@ func (r *gopathResolver) scan(ctx context.Context, callback *scanCallback) error
 		r.cache.Store(dir, info)
 	}
 	processDir := func(info directoryPackageInfo) {
+		if r.env.PathAllowed != nil && !r.env.PathAllowed(info.dir) {
+			return
+		}
 		// Skip this directory if we were not able to get the package information successfully.
 		if scanned, err := info.reachedStatus(directoryScanned); !scanned || err != nil {
 			return
@@ -1568,7 +1600,7 @@ func (r *gopathResolver) scan(ctx context.Context, callback *scanCallback) error
 			return
 		}
 		var err error
-		p.packageName, err = r.cache.CachePackageName(info)
+		p.packageName, err = r.cache.CachePackageName(info, r.env.PathAllowed)
 		if err != nil {
 			return
 		}
@@ -1604,7 +1636,10 @@ func (r *gopathResolver) scan(ctx context.Context, callback *scanCallback) error
 		case <-r.scanSema:
 		}
 		defer func() { r.scanSema <- struct{}{} }()
-		gopathwalk.Walk(roots, add, gopathwalk.Options{Logf: r.env.Logf, ModulesEnabled: false})
+		skip := func(root gopathwalk.Root, dir string) bool {
+			return r.env.PathAllowed != nil && !r.env.PathAllowed(dir)
+		}
+		gopathwalk.WalkSkip(roots, add, skip, gopathwalk.Options{Logf: r.env.Logf, ModulesEnabled: false})
 		close(scanDone)
 	}()
 	select {
@@ -1653,6 +1688,9 @@ func VendorlessPath(ipath string) string {
 }
 
 func loadExportsFromFiles(ctx context.Context, env *ProcessEnv, dir string, includeTest bool) (string, []stdlib.Symbol, error) {
+	if env.PathAllowed != nil && !env.PathAllowed(dir) {
+		return "", nil, fmt.Errorf("source directory %s is outside permitted roots", dir)
+	}
 	// Look for non-test, buildable .go files which could provide exports.
 	all, err := os.ReadDir(dir)
 	if err != nil {
@@ -1662,6 +1700,9 @@ func loadExportsFromFiles(ctx context.Context, env *ProcessEnv, dir string, incl
 	for _, fi := range all {
 		name := fi.Name()
 		if !strings.HasSuffix(name, ".go") || (!includeTest && strings.HasSuffix(name, "_test.go")) {
+			continue
+		}
+		if env.PathAllowed != nil && !env.PathAllowed(filepath.Join(dir, fi.Name())) {
 			continue
 		}
 		match, err := env.matchFile(dir, fi.Name())

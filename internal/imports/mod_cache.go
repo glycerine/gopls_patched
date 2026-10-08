@@ -217,14 +217,14 @@ func (d *DirInfoCache) Keys() (keys []string) {
 	return keys
 }
 
-func (d *DirInfoCache) CachePackageName(info directoryPackageInfo) (string, error) {
+func (d *DirInfoCache) CachePackageName(info directoryPackageInfo, filters ...func(string) bool) (string, error) {
 	if loaded, err := info.reachedStatus(nameLoaded); loaded {
 		return info.packageName, err
 	}
 	if scanned, err := info.reachedStatus(directoryScanned); !scanned || err != nil {
 		return "", fmt.Errorf("cannot read package name, scan error: %v", err)
 	}
-	info.packageName, info.err = packageDirToName(info.dir)
+	info.packageName, info.err = packageDirToName(info.dir, filters...)
 	info.status = nameLoaded
 	d.Store(info.dir, info)
 	return info.packageName, info.err
@@ -254,7 +254,7 @@ func (d *DirInfoCache) CacheExports(ctx context.Context, env *ProcessEnv, info d
 
 // ScanModuleCache walks the given directory, which must be a GOMODCACHE value,
 // for directory package information, storing the results in cache.
-func ScanModuleCache(dir string, cache *DirInfoCache, logf func(string, ...any)) {
+func ScanModuleCache(dir string, cache *DirInfoCache, logf func(string, ...any), pathFilters ...func(string) bool) {
 	// Note(rfindley): it's hard to see, but this function attempts to implement
 	// just the side effects on cache of calling PrimeCache with a ProcessEnv
 	// that has the given dir as its GOMODCACHE.
@@ -314,6 +314,11 @@ func ScanModuleCache(dir string, cache *DirInfoCache, logf func(string, ...any))
 	}
 
 	skip := func(_ gopathwalk.Root, dir string) bool {
+		for _, allowed := range pathFilters {
+			if allowed != nil && !allowed(dir) {
+				return true
+			}
+		}
 		// Skip directories that have already been scanned.
 		//
 		// Note that gopathwalk only adds "package" directories, which must contain
