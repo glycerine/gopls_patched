@@ -22,5 +22,3 @@ server-flags:
     	no effect
   -rpc.trace
     	print the full rpc trace in lsp inspector format
-  -showroots
-    	print permitted search roots to stdout and continue serving

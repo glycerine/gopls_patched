@@ -69,6 +69,8 @@ flags:
     	when used with -remote=auto, the -listen.timeout value used to start the daemon (default 1m0s)
   -remote.logfile=string
     	when used with -remote=auto, the -logfile value used to start the daemon
+  -showroots
+    	print permitted search roots to stdout and continue the command
   -v,-verbose
     	verbose output
   -vv,-veryverbose

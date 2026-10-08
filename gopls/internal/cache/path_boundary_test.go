@@ -285,6 +285,13 @@ func TestRootOutput(t *testing.T) {
 	s.boundary.addGoEnv("", gp1+string(os.PathListSeparator)+gp2)
 	s.boundary.add(gp1) // repeated roots must not produce repeated output
 	got := strings.Split(strings.TrimSpace(output.String()), "\n")
+	for i, line := range got {
+		root, ok := strings.CutPrefix(line, "showroots: ")
+		if !ok {
+			t.Fatalf("unprefixed root output %q", line)
+		}
+		got[i] = root
+	}
 	want := slices.Clone(s.boundary.roots)
 	slices.Sort(got)
 	slices.Sort(want)

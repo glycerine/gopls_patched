@@ -33,11 +33,13 @@ opening another folder in the editor does not expand this boundary. Starting
 it in your home directory permits discovery throughout that directory.
 
 Pass `-showroots` to print the permitted root directories to stdout, one per
-line, and continue serving. Additional roots are printed when workspace
-configuration admits them; duplicate and symlink-equivalent paths are printed
+line prefixed with `showroots: `, and continue the command. Additional roots
+are printed when workspace configuration admits them; duplicate and symlink-equivalent paths are printed
 only once. This diagnostic output shares stdout with LSP messages in stdio mode.
-For example: `gopls -showroots`, or `gopls serve -showroots`. When using a
-remote server, enable the flag on that server rather than the forwarder.
+The flag works before or after the command: `gopls -showroots`,
+`gopls serve -showroots`, `gopls -showroots stats`, or `gopls stats -showroots`.
+When using a remote server, enable the flag on that server rather than the
+forwarder.
 
 Parent `go.mod` and `go.work` searches stop at the boundary. Workspace folders,
 explicit GOWORK files, local `use` and `replace` targets, and a custom

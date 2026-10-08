@@ -131,6 +131,37 @@ func normalize(app *application, args []string) (cmd command, globalArgs, cmdArg
 		return cmd, nil, nil, commandLineErrorf("flag provided but not defined: -%s", name)
 	}
 
+	// This diagnostic flag is also accepted after the subcommand. Respect
+	// flag values and the positional-argument boundary so a filename or option
+	// value named "-showroots" is not accidentally interpreted as a flag.
+	cmdFlags := silentFlagSet(cmd.Name(), cmd)
+	var remaining []string
+	for i := 0; i < len(cmdArgs); {
+		arg := cmdArgs[i]
+		if arg == "--" || arg == "-" || !strings.HasPrefix(arg, "-") {
+			remaining = append(remaining, cmdArgs[i:]...)
+			break
+		}
+		name, _, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+		if name == "showroots" {
+			globalArgs = append(globalArgs, arg)
+			i++
+			continue
+		}
+		f := cmdFlags.Lookup(name)
+		if f == nil {
+			remaining = append(remaining, cmdArgs[i:]...)
+			break
+		}
+		consumed, err := consume(cmdArgs, i, f, name, hasValue)
+		if err != nil {
+			return cmd, nil, nil, err
+		}
+		remaining = append(remaining, consumed...)
+		i += len(consumed)
+	}
+	cmdArgs = remaining
+
 	return cmd, globalArgs, cmdArgs, nil
 }
 

@@ -54,6 +54,9 @@ type application struct {
 	// Remote LSP client connection flags.
 	RemoteFlags
 
+	// ShowRoots prints the source roots admitted by local sessions.
+	ShowRoots bool `flag:"showroots" help:"print permitted search roots to stdout and continue the command"`
+
 	// Verbose enables verbose logging.
 	Verbose bool `flag:"v,verbose" help:"verbose output"`
 
@@ -323,8 +326,20 @@ func (app *application) featureCommands() []command {
 	}
 }
 
+// newCache enables root diagnostics for both the server and local CLI commands.
+func (app *application) newCache() *cache.Cache {
+	c := cache.New(nil)
+	if app.ShowRoots {
+		c.SetRootOutput(os.Stdout)
+	}
+	return c
+}
+
 // connect creates and initializes a new in-process gopls LSP session.
 func (app *application) connect(ctx context.Context) (*client, *cache.Session, error) {
+	if app.ShowRoots && app.Remote != "" {
+		return nil, nil, commandLineErrorf("-showroots must be enabled on the server, not a remote forwarder")
+	}
 
 	root, err := os.Getwd()
 	if err != nil {
@@ -338,7 +353,7 @@ func (app *application) connect(ctx context.Context) (*client, *cache.Session, e
 	)
 	if app.Remote == "" {
 		// local
-		sess = cache.NewSession(ctx, cache.New(nil))
+		sess = cache.NewSession(ctx, app.newCache())
 		svr = server.New(sess, client, options)
 		ctx = protocol.WithClient(ctx, client)
 	} else {

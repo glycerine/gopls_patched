@@ -74,7 +74,11 @@ func TestShowRoots(t *testing.T) {
 						result <- err
 						return
 					}
-					root := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+					if !strings.HasPrefix(line, "showroots: ") {
+						result <- fmt.Errorf("unprefixed root line %q", line)
+						return
+					}
+					root := strings.TrimSpace(strings.TrimPrefix(line, "showroots: "))
 					if !want[root] || roots[root] {
 						result <- fmt.Errorf("unexpected or duplicate root %q", root)
 						return
@@ -144,5 +148,37 @@ func TestRootsQuietByDefault(t *testing.T) {
 	res.checkExit(true)
 	if res.stdout != "" {
 		t.Errorf("unexpected stdout without -showroots: %q", res.stdout)
+	}
+}
+
+func TestShowRootsStats(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{"-showroots", "stats"}, {"stats", "-showroots"}, {"stats", "-anon", "-showroots"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			dir := writeTree(t, "-- go.mod --\nmodule example.com\ngo 1.18\n-- a.go --\npackage a\n")
+			// Put all source/build cache roots in the writable test workspace.
+			env := []string{"GOPATH=" + filepath.Join(dir, "gopath"), "GOMODCACHE=" + filepath.Join(dir, "gopath", "pkg", "mod"), "GOCACHE=" + os.Getenv("GOCACHE")}
+			res := goplsWithEnv(t, dir, env, args...)
+			res.checkExit(true)
+			found := false
+			output := res.stdout
+			for strings.HasPrefix(output, "showroots: ") {
+				line, rest, _ := strings.Cut(output, "\n")
+				if line == "showroots: ." {
+					found = true
+				}
+				output = rest
+			}
+			if !found {
+				t.Fatalf("startup root missing from stdout: %s", res.stdout)
+			}
+			var stats map[string]any
+			if err := json.Unmarshal([]byte(output), &stats); err != nil {
+				t.Fatalf("stats did not complete after root output: %v\n%s", err, res.stdout)
+			}
+			if _, ok := stats["WorkspaceStats"]; !ok {
+				t.Error("missing WorkspaceStats")
+			}
+		})
 	}
 }

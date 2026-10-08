@@ -265,13 +265,13 @@ func (out *rootOutput) report(root string) {
 	defer out.mu.Unlock()
 	if !out.seen[root] {
 		out.seen[root] = true
-		fmt.Fprintln(out.writer, root)
+		fmt.Fprintf(out.writer, "showroots: %s\n", root)
 	}
 }
 
 // SetRootOutput prints the permitted startup roots to w and reports additional
 // roots as session configuration admits them. Call it before creating sessions.
-// Paths are resolved, deduplicated, and printed one per line.
+// Paths are resolved, deduplicated, and printed one per line with a "showroots: " prefix.
 func (c *Cache) SetRootOutput(w io.Writer) {
 	c.rootOutput = &rootOutput{writer: w, seen: make(map[string]bool)}
 	for _, root := range newPathBoundary(c.startupDir).roots {

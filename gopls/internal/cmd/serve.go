@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/tools/gopls/internal/cache"
 	"golang.org/x/tools/gopls/internal/debug"
 	"golang.org/x/tools/gopls/internal/lsprpc"
 	"golang.org/x/tools/gopls/internal/mcp"
@@ -27,7 +26,6 @@ import (
 
 // serve defines the flags and working state of the gopls serve command.
 type serve struct {
-	ShowRoots   bool          `flag:"showroots" help:"print permitted search roots to stdout and continue serving"`
 	Logfile     string        `flag:"logfile" help:"filename to log to. if value is \"auto\", then logging to a default output file is enabled"`
 	Mode        string        `flag:"mode" help:"no effect"`
 	Address     string        `flag:"listen" help:"address on which to listen for remote connections. If prefixed by 'unix;', the subsequent address is assumed to be a unix domain socket. Otherwise, TCP is used."`
@@ -65,7 +63,7 @@ func (s *serve) Run(ctx context.Context, args ...string) error {
 		return commandLineErrorf("server does not take arguments, got %v", args)
 	}
 
-	if s.ShowRoots && s.app.Remote != "" {
+	if s.app.ShowRoots && s.app.Remote != "" {
 		return commandLineErrorf("-showroots must be enabled on the server, not a remote forwarder")
 	}
 	di := debug.GetInstance(ctx)
@@ -91,10 +89,7 @@ func (s *serve) Run(ctx context.Context, args ...string) error {
 			return fmt.Errorf("creating forwarder: %w", err)
 		}
 	} else {
-		serverCache := cache.New(nil)
-		if s.ShowRoots {
-			serverCache.SetRootOutput(os.Stdout)
-		}
+		serverCache := s.app.newCache()
 		lsprpcServer := lsprpc.NewStreamServer(serverCache, isDaemon, s.app.options)
 		ss = lsprpcServer
 		if s.MCPAddress != "" {
